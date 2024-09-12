@@ -19,6 +19,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         #not really a 'bias', more of a mask, but following the OpenAI/HF naming though
+        # under trigonal matrix를 만들기.
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                              .view(1,1,config.block_size, config.block_size))
     
@@ -34,6 +35,8 @@ class CausalSelfAttention(nn.Module):
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention (materializes the large (T,T) matrix for all the queries and keys)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        
+        #bias: future information:0, present information:1. 0 to -inf. 
         att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) #autoregressive mask
         att = F.softmax(att, dim=-1) # always 1 when added all outputs
         y = att @ v #(B, nh, T, T) * (B, nh, T, hs) -> (B, nh, T, hs)
