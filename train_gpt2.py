@@ -220,6 +220,7 @@ class DataLoaderLite:
 
 
 #----------------------------------------------------------------------
+import time
 
 device = "cpu"
 if torch.cuda.is_available():
@@ -234,7 +235,9 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(1337)
 
 
-train_loader = DataLoaderLite(B=4,T=32)
+train_loader = DataLoaderLite(B=4,T=1024)
+
+torch.set_float32_matmul_precision('high')
 
 # import tiktoken
 """enc = tiktoken.get_encoding('gpt2')
@@ -250,18 +253,30 @@ y = buf[1:].view(B,T)"""
 
 model = GPT(GPTConfig())
 model.to(device)
+model = torch.compile(model) # 효율적인 코드로 학습하게 되어 빨라짐.
 # logits, loss = model(x, y)
 
 #optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
 for i in range(50):
+    t0 = time.time()
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
+    with torch.autocast(device_type=device, dtype=torch.bfloat16):
+        logits, loss = model(x,y) # mixed precision - model의 weight는 fp32로, logit이나 loss는 bf16으로..
+        
     logits, loss = model(x,y)
+    #import code; code.interact(local=locals()) # torch의 기본 데이터 타입은 torch.float32 다. 32bit를 써서 실수를 구분함.
+    # FP32보다 FP16이 16배 계산량이 많다. (빠르다.)
+    # INT8은 train할 땐 안 쓰고 inference할 때만 쓴다.
     loss.backward()
     optimizer.step()
-    print(f"step {i}, loss: {loss.item()}")
+    torch.cuda.synchronize()
+    t1 = time.time()
+    dt = (t1-t0)*1000 # time difference in milliseconds
+    tokens_per_sec = (train_loader.B* train_loader.T) / (t1 - t0)
+    print(f"step {i}, loss: {loss.item()}, dt:{dt:.2f}ms, tok/sec: {tokens_per_sec:.2f}")
 
 
 import sys; sys.exit(0)
