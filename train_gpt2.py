@@ -388,7 +388,7 @@ for step in range(max_steps):
             model.require_backward_grad_sync = (micro_step == grad_accum_steps -1)
         loss.backward()
     if ddp:
-        dist.all_reduce(loss_accum, op=dist.DeduceOp.AVG)
+        dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
 
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) # parameter의 norm이 1보다 크면 잘라냄.
                                                                    # norm이 너무 크다는 것은 너무 큰 loss를 얻는 다는건데, model이 shock을 먹고 훈련이 안정되지 않을 수 있음.
