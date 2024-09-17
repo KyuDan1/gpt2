@@ -315,7 +315,7 @@ if maskter_process:
 
 
 
-train_loader = DataLoaderLite(B=B, T=T, process_rank = ddp_rank, num_process=ddp_world_size)
+train_loader = DataLoaderLite(B=B, T=T, process_rank = ddp_rank, num_processes=ddp_world_size)
 
 
 torch.set_float32_matmul_precision('high')
