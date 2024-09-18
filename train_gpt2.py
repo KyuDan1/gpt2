@@ -227,7 +227,7 @@ class GPT(nn.Module):
 
 #----------------------------------------------------------------------
 import tiktoken
-
+import numpy as np
 def load_tokens(filename):
     npt = np.load(filename)
     npt = npt.astype(np.int32) # added after video
@@ -236,42 +236,60 @@ def load_tokens(filename):
 
 class DataLoaderLite:
     def __init__(self, B, T, process_rank, num_processes, split):
-        self.B = B
-        self.T = T
-        self.process_rank = process_rank
-        self.num_processes = num_processes
-        assert split in {'train', 'val'}
+        self.B = B  # batch size
+        self.T = T  # sequence length
+        self.process_rank = process_rank  # rank of the current process
+        self.num_processes = num_processes  # total number of processes
+        assert split in {'train', 'val'}, "split must be 'train' or 'val'"
+        self.split = split
 
-        # get the shard filenames
-        data_root = "edu_fineweb10B"
-        shards = os.listdir(data_root)
-        shards = [s for s in shards if split in s]
-        shards = sorted(shards)
-        shards = [os.path.join(data_root, s) for s in shards]
-        self.shards = shards
-        assert len(shards) > 0, f"no shards found for split {split}"
-        if master_process:
-            print(f"found {len(shards)} shards for split {split}")
+        # Load the data from 'input.txt'
+        data_file = 'input.txt'
+        with open(data_file, 'r', encoding='utf-8') as f:
+            data = f.read()
+
+        # Create a character-level vocabulary
+        self.vocab = sorted(set(data))
+        self.vocab_size = len(self.vocab)
+        self.stoi = {ch: i for i, ch in enumerate(self.vocab)}  # char to index
+        self.itos = {i: ch for i, ch in enumerate(self.vocab)}  # index to char
+
+        # Encode the entire dataset
+        tokens = [self.stoi[c] for c in data]
+
+        # Split the data into training and validation sets (90% train, 10% val)
+        split_idx = int(0.9 * len(tokens))
+        if split == 'train':
+            self.tokens = tokens[:split_idx]
+        else:
+            self.tokens = tokens[split_idx:]
+
+        # Convert tokens to a PyTorch tensor
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
+
+        # Initialize the data loader state
         self.reset()
 
     def reset(self):
-        # state, init at shard zero
-        self.current_shard = 0
-        self.tokens = load_tokens(self.shards[self.current_shard])
+        # Start position for the current process
         self.current_position = self.B * self.T * self.process_rank
 
     def next_batch(self):
         B, T = self.B, self.T
-        buf = self.tokens[self.current_position : self.current_position+B*T+1]
-        x = (buf[:-1]).view(B, T) # inputs
-        y = (buf[1:]).view(B, T) # targets
-        # advance the position in the tensor
-        self.current_position += B * T * self.num_processes
-        # if loading the next batch would be out of bounds, advance to next shard
+
+        # Check if there are enough tokens left for the next batch across all processes
         if self.current_position + (B * T * self.num_processes + 1) > len(self.tokens):
-            self.current_shard = (self.current_shard + 1) % len(self.shards)
-            self.tokens = load_tokens(self.shards[self.current_shard])
-            self.current_position = B * T * self.process_rank
+            # If not, reset to the beginning
+            self.reset()
+
+        # Slice out the buffer for the current batch
+        buf = self.tokens[self.current_position : self.current_position + B * T + 1]
+        x = buf[:-1].view(B, T)  # input sequences
+        y = buf[1:].view(B, T)   # target sequences
+
+        # Advance the position for the next batch
+        self.current_position += B * T * self.num_processes
+
         return x, y
 
 
@@ -299,13 +317,13 @@ if ddp:
     ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
-    maskter_process = ddp_rank == 0 #this process will do logging, checkpointing etc.
+    master_process = ddp_rank == 0 #this process will do logging, checkpointing etc.
 else:
     # vanilla, non-DDP run
     ddp_rank = 0
     ddp_local_rank = 0
     ddp_world_size = 1
-    maskter_process = True
+    master_process = True
     # attempt to autodetect device
     device = "cpu"
     if torch.cuda.is_available():
@@ -326,7 +344,7 @@ B = 4 # micro batch size
 T = 1024 # sequence length
 assert total_batch_size % (B * T * ddp_world_size) == 0, "make sure total_batch_size is divisible by B * T * ddp_world_size"
 grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
-if maskter_process:
+if master_process:
     print(f"total desired batch size: {total_batch_size}")
     print(f"=> calculated gradient accumulation steps: {grad_accum_steps}")
 
@@ -385,8 +403,8 @@ optimizer = raw_model.configure_optimizers(weight_decay = 0.1, learning_rate=6e-
 
 for step in range(max_steps):
     t0 = time.time()
-    #once in a while evaluate our validation loss
-    if step % 100 == 0:
+    # Once in a while, evaluate our validation loss
+    if step % 10 == 0:
         model.eval()
         val_loader.reset()
         with torch.no_grad():
@@ -397,12 +415,18 @@ for step in range(max_steps):
                 x, y = x.to(device), y.to(device)
                 with torch.autocast(device_type=device, dtype=torch.bfloat16):
                     logits, loss = model(x, y)
-                loss = loss / val_loss_steps
-                val_loss_accum += loss.detach()
+                val_loss_accum += loss.item()
+            # Compute average loss across validation steps
+            val_loss_accum /= val_loss_steps
+            # Convert to tensor for reduction
+            val_loss_tensor = torch.tensor(val_loss_accum, device=device)
         if ddp:
-            dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
-        if maskter_process:
-            print(f"validation loss: {val_loss_accum.item():.4f}")
+            # Reduce across all processes to get the sum, then average
+            dist.all_reduce(val_loss_tensor, op=dist.ReduceOp.SUM)
+            val_loss_tensor /= dist.get_world_size()
+            val_loss_accum = val_loss_tensor.item()
+        if master_process:
+            print(f"Validation loss: {val_loss_accum:.4f}")
 
 
     model.train()
@@ -436,7 +460,7 @@ for step in range(max_steps):
     dt = (t1-t0) # time difference in milliseconds
     tokens_processed = train_loader.B * train_loader.T * grad_accum_steps * ddp_world_size
     tokens_per_sec = tokens_processed / dt
-    if maskter_process:
+    if master_process:
         print(f"step {step} | loss: {loss_accum.item():.6f} | lr: {lr} | norm: {norm:.4f} | dt:{(dt*100):.2f}ms | tok/sec: {tokens_per_sec:.2f}")
 
 
@@ -451,7 +475,7 @@ model.eval()
 num_return_sequences = 5
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
-tokens = enc.encode("Hello, my name is Tim and ")
+tokens = enc.encode("Hello, I am Tim, and")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
 x = tokens.to('cuda')
