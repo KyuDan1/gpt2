@@ -1,4 +1,4 @@
-# gpt2
+# GPT2
 making gpt2 from scratch
 
 - reference
