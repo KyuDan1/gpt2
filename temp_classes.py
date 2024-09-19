@@ -60,7 +60,7 @@ class CausalSelfAttention(nn.Module):
         time_c_proj_0 = time.time()
         y = self.c_proj(y)
         time_c_proj_1 = time.time()
-        print(f"c_proj layer {time_c_proj_1-time_c_proj_0} sec")
+        print(f"c_proj layer: {time_c_proj_1-time_c_proj_0} sec")
         return y
 
 
@@ -75,17 +75,17 @@ class MLP(nn.Module):
         time_cfc_0 = time.time()
         x = self.c_fc(x)
         time_cfc_1 = time.time()
-        print(f"c_fc layer{time_cfc_1-time_cfc_0} sec")
+        print(f"c_fc layer: {time_cfc_1-time_cfc_0} sec")
 
         time_gelu_0 = time.time()
         x = self.gelu(x)
         time_gelu_1 = time.time()
-        print(f"gelu calculated {time_gelu_1-time_gelu_0} sec")
+        print(f"gelu calculated: {time_gelu_1-time_gelu_0} sec")
         
         time_c_proj_0 = time.time()
         x = self.c_proj(x)
         time_c_proj_1 = time.time()
-        print(f"c_proj layer {time_c_proj_1-time_c_proj_0} sec")
+        print(f"c_proj layer: {time_c_proj_1-time_c_proj_0} sec")
         return x
 
 class Block(nn.Module):
@@ -97,15 +97,36 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
-        time_forward1_0 = time.time()
-        x = x + self.attn(self.ln_1(x))
-        time_forward1_1 = time.time()
-        print(f"layer norm, attention, skip connection done. {time_forward1_1-time_forward1_0} sec")
         
-        time_forward2_0 = time.time()
-        x = x + self.mlp(self.ln_2(x))
-        time_forward2_1 = time.time()
-        print(f"layer norm, MLP, skip connection done. {time_forward2_1-time_forward2_0} sec")
+        x0 = x
+        time_ln_1_0 = time.time()
+        x = self.ln_1(x)
+        time_ln_1_1 = time.time()
+        print(f"layer norm 1: {time_ln_1_1-time_ln_1_0} sec")
+        time_attn_0 = time.time()
+        x = self.attn(x)
+        time_attn_1 = time.time()
+        #print(f"attn_1 {time_attn_1-time_attn_0} sec")
+        time_skip_0 = time.time()
+        x = x0 + x
+        time_skip_1 = time.time()
+        print(f"skip connection: {time_skip_1-time_skip_0} sec")
+        
+
+        x1 = x
+        time_ln_1_0 = time.time()
+        x = self.ln_2(x)
+        time_ln_1_1 = time.time()
+        print(f"layer norm 2: {time_ln_1_1-time_ln_1_0} sec")
+        time_attn_0 = time.time()
+        x = self.mlp(x)
+        time_attn_1 = time.time()
+        #print(f"mlp {time_attn_1-time_attn_0} sec")
+        time_skip_0 = time.time()
+        x = x1 + x
+        time_skip_1 = time.time()
+        print(f"skip connection 2: {time_skip_1-time_skip_0} sec")
+
         return x
 
 
