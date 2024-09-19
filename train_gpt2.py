@@ -463,15 +463,24 @@ for step in range(max_steps):
     if master_process:
         print(f"step {step} | loss: {loss_accum.item():.6f} | lr: {lr} | norm: {norm:.4f} | dt:{(dt*100):.2f}ms | tok/sec: {tokens_per_sec:.2f}")
 
+# Save the model (only on the master process)
+if master_process:
+    torch.save(model.state_dict(), 'mygpt2model.pth')
 
 if ddp:
     destroy_process_group()
 
-import sys; sys.exit(0)
 
 
+#import sys; sys.exit(0)
+
+model = GPT(GPTConfig(vocab_size=50304))
+model.load_state_dict(torch.load('mygpt2model.pth'))
+model.to('cuda')
 #prefix tokens
 model.eval()
+
+
 num_return_sequences = 5
 import tiktoken
 enc = tiktoken.get_encoding('gpt2')
@@ -479,6 +488,9 @@ tokens = enc.encode("Hello, I am Tim, and")
 tokens = torch.tensor(tokens, dtype=torch.long)
 tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
 x = tokens.to('cuda')
+
+
+max_length = 100 
 
 # generate! right now x is (B, T) where B = 5, T = 8
 # Set the seed to 42
