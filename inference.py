@@ -1,9 +1,21 @@
-from train_gpt2 import *
+from temp_classes import GPT, GPTConfig
+import torch
+import time
+
+device = "cpu"
+if torch.cuda.is_available():
+    device = "cuda"
+#apple silicon mps
+elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+    device = "mps"
+print(f"using device: {device}")
+
+
 print("model instance start")
 model = GPT(GPTConfig(vocab_size=50304))
 print("made GPT structure")
 print("model load start")
-model.load_state_dict(torch.load('mygpt2model.pth'))
+model.load_state_dict(torch.load('mygpt2model.pth', map_location=torch.device('cpu')))
 print("loaded_state_dict")
 model.to('cpu')
 print("model to cpu")
