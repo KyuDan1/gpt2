@@ -32,7 +32,10 @@ class CausalSelfAttention(nn.Module):
         #calculate query, key, values for all heads in batch and move head forward to be the batch
         #nh is "number of heads", hs is "head size", and C(number of channels) = nh * hs
         # e.g. in GPT-2 (124M). n_head = 12, hs = 64, so C = 768 channels in the Transformer
+        time_qkv_0 = time.time()
         qkv = self.c_attn(x)
+        time_qkv_1 = time.time()
+        print(f"c_attn layer: {time_qkv_1-time_qkv_0} sec")
         q, k, v = qkv.split(self.n_embd, dim=2)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
@@ -46,12 +49,17 @@ class CausalSelfAttention(nn.Module):
         #y = att @ v #(B, nh, T, T) * (B, nh, T, hs) -> (B, nh, T, hs)
         
         # FlashAttention (굉장히 빨라짐!)
+        time_flash_0 = time.time()
         y = F.scaled_dot_product_attention(q,k,v, is_causal=True)
-
+        time_flash_1 = time.time()
+        print(f"Flash Attention:{time_flash_1-time_flash_0} sec")
 
         y = y.transpose(1,2).contiguous().view(B,T,C) #re-assemble all head outputs side size 
         #output projection
+        time_c_proj_0 = time.time()
         y = self.c_proj(y)
+        time_c_proj_1 = time.time()
+        print(f"c_proj layer {time_c_proj_1-time_c_proj_0} sec")
         return y
 
 
@@ -63,9 +71,20 @@ class MLP(nn.Module):
         self.c_proj = nn.Linear(4*config.n_embd, config.n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
     def forward(self,x):
+        time_cfc_0 = time.time()
         x = self.c_fc(x)
+        time_cfc_1 = time.time()
+        print(f"c_fc layer{time_cfc_1-time_cfc_0} sec")
+
+        time_gelu_0 = time.time()
         x = self.gelu(x)
+        time_gelu_1 = time.time()
+        print(f"gelu calculated {time_gelu_1-time_gelu_0} sec")
+        
+        time_c_proj_0 = time.time()
         x = self.c_proj(x)
+        time_c_proj_1 = time.time()
+        print(f"c_proj layer {time_c_proj_1-time_c_proj_0} sec")
         return x
 
 class Block(nn.Module):
@@ -77,8 +96,15 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
+        time_forward1_0 = time.time()
         x = x + self.attn(self.ln_1(x))
+        time_forward1_1 = time.time()
+        print(f"layer norm, attention, skip connection done. {time_forward1_1-time_forward1_0} sec")
+        
+        time_forward2_0 = time.time()
         x = x + self.mlp(self.ln_2(x))
+        time_forward2_1 = time.time()
+        print(f"layer norm, MLP, skip connection done. {time_forward2_1-time_forward2_0} sec")
         return x
 
 
